@@ -4,7 +4,7 @@
 import { AccessToken } from "@azure/identity";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebApi } from "azure-devops-node-api";
-import { BuildQueryOrder, DefinitionQueryOrder } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
+import { BuildQueryOrder, DefinitionQueryOrder, UpdateStageParameters } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
 import { z } from "zod";
 
 const BUILD_TOOLS = {
@@ -15,7 +15,8 @@ const BUILD_TOOLS = {
   get_log_by_id: "build_get_log_by_id",
   get_changes: "build_get_changes",
   run_build: "build_run_build",
-  get_status: "build_get_status"
+  get_status: "build_get_status",
+  update_stage: "build_update_stage"
 };
 
 function configureBuildTools(
@@ -297,6 +298,62 @@ function configureBuildTools(
 
       return {
         content: [{ type: "text", text: JSON.stringify(build, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    BUILD_TOOLS.update_stage,
+    "Updates a stage in a running build.",
+    {
+      project: z.string().optional().describe("Project ID or name. If not provided, the project from the build context will be used."),
+      buildId: z.number().describe("ID of the build containing the stage to update"),
+      stageRefName: z.string().describe("Reference name of the stage to update (e.g., 'stage1', 'Deploy')"),
+      updateParameters: z.object({
+        forceRetryAllJobs: z.boolean().optional().describe("Whether to force retry all jobs in the stage"),
+        state: z.enum(["Cancel", "Retry", "Run"]).optional().describe("Update type for the stage: Cancel (0), Retry (1), or Run (2)")
+      }).describe("Parameters for updating the stage")
+    },
+    async ({ project, buildId, stageRefName, updateParameters }) => {
+      const connection = await connectionProvider();
+      const buildApi = await connection.getBuildApi();
+      
+      // Convert string state to enum value
+      let stageUpdateType: number | undefined;
+      if (updateParameters.state) {
+        switch (updateParameters.state) {
+          case "Cancel":
+            stageUpdateType = 0;
+            break;
+          case "Retry":
+            stageUpdateType = 1;
+            break;
+          case "Run":
+            stageUpdateType = 2;
+            break;
+        }
+      }
+      
+      const apiUpdateParameters: UpdateStageParameters = {
+        ...updateParameters,
+        state: stageUpdateType
+      };
+      
+      await buildApi.updateStage(apiUpdateParameters, buildId, stageRefName, project);
+
+      return {
+        content: [
+          { 
+            type: "text", 
+            text: JSON.stringify({
+              success: true,
+              message: `Stage '${stageRefName}' in build ${buildId} has been updated successfully`,
+              buildId,
+              stageRefName,
+              updateParameters: apiUpdateParameters
+            }, null, 2)
+          }
+        ],
       };
     }
   );
